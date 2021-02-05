@@ -8,7 +8,10 @@ from functools import cmp_to_key
 import textwrap
 from io import StringIO
 
+
 import sys
+
+from auto_struct.exceptions.base import AutoStructTypeException
 
 from ctypeslib.codegen import clangparser
 from ctypeslib.codegen import typedesc
@@ -484,7 +487,8 @@ class Generator(object):
         else:
             ### methods = [m for m in head.struct.members if type(m) is typedesc.Method]
             if isinstance(head.struct, typedesc.Structure):
-                print("class %s(ctypes.Structure):" % head.struct.name, file=self.stream)
+                print("@dataclass", file=self.stream)
+                print("class %s(auto_struct.BasicStruct):" % head.struct.name, file=self.stream)
             elif isinstance(head.struct, typedesc.Union):
                 print("class %s(ctypes.Union):" % head.struct.name, file=self.stream)
         if not inline:
@@ -494,6 +498,32 @@ class Generator(object):
             print("    pass\n", file=self.stream)
         self.names.add(head.struct.name)
         log.debug('Head finished for %s', head.name)
+
+    def get_autostruct_type(self, field):
+        fieldtype = field.type
+        ctypes_primitives_to_autostruct = {
+            'c_int8': 'int8_t',
+            'c_int16': 'int16_t',
+            'c_int32': 'int32_t',
+            'c_int64': 'int64_t',
+            'c_uint8': 'uint8_t',
+            'c_uint16': 'uint16_t',
+            'c_uint32': 'uint32_t',
+            'c_uint64': 'uint64_t',
+            'c_char': 'Char',
+            'c_ubyte': 'uint8_t'
+        }
+        if (isinstance(fieldtype, typedesc.FundamentalType)):
+            return ctypes_primitives_to_autostruct[fieldtype.name]
+        elif isinstance(fieldtype, typedesc.ArrayType):
+            if field.is_padding:
+                return 'auto_struct.Padding({})'.format(fieldtype.size)
+            typename = fieldtype.name.replace('array_', '')
+            return 'auto_struct.Array({}, {})'.format(ctypes_primitives_to_autostruct[typename], fieldtype.size)
+        elif isinstance(fieldtype, typedesc.Structure):
+            return fieldtype.name
+        else:
+            raise AutoStructTypeException("Unknown field type {}".format(field))
 
     def StructureBody(self, body, inline=False):
         log.debug('Body start for %s', body.name)
@@ -525,9 +555,6 @@ class Generator(object):
             pass
         # LXJ: we pack all the time, because clang gives a precise field offset
         # per target architecture. No need to defer to ctypes logic for that.
-        if fields:
-            print("%s_pack_ = True # source:%s" % (
-                prefix, body.struct.packed), file=self.stream)
 
         if body.struct.bases:
             if len(body.struct.bases) == 1:  # its a Struct or a simple Class
@@ -553,20 +580,18 @@ class Generator(object):
             print("%s_anonymous_ = %r" % \
                 (prefix, unnamed_fields.values()), file=self.stream)
         if len(fields) > 0:
-            print("%s_fields_ = [" % (prefix), file=self.stream)
-
             if self.generate_locations and body.struct.location:
                 print("    # %s %s" % body.struct.location, file=self.stream)
             index = 0
             for f in fields:
                 fieldname = unnamed_fields.get(f, f.name)
-                type_name = self.type_name(f.type)
+                type_name = self.get_autostruct_type(f)
                 # handle "__" prefixed names by using a wrapper
                 if type_name.startswith("__"):
                     type_name = "globals()['%s']" % type_name
                 # a bitfield needs a triplet
-                if f.is_bitfield is False:
-                    print("    ('%s', %s)," % \
+                if not f.is_bitfield:
+                    print("    %s: %s" % \
                         (fieldname, type_name), file=self.stream)
                 else:
                     # FIXME: Python bitfield is int32 only.
@@ -581,7 +606,7 @@ class Generator(object):
                          f.bits), file=self.stream)
             if inline:
                 print(prefix, end=' ', file=self.stream)
-            print("]\n", file=self.stream)
+            print("", file=self.stream)
         log.debug('Body finished for %s', body.name)
         return
 

@@ -6,3 +6,6 @@
 # LONGDOUBLE_SIZE is: __LONGDOUBLE_SIZE__
 #
 import ctypes
+import auto_struct
+from auto_struct import *
+from dataclasses import dataclass
